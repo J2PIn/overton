@@ -1,0 +1,9 @@
+{
+  "name": "overton-radar",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo \"No build yet\"",
+    "start": "echo \"No start yet\""
+  }
+}

@@ -3,43 +3,95 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Overton Radar — D1 Smoke Test</title>
+    <title>Overton Radar — MVP</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-      .row { display: flex; gap: 8px; margin-bottom: 12px; }
-      input { padding: 8px; min-width: 320px; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 1100px; }
+      .row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+      input, select { padding: 8px; min-width: 280px; }
       button { padding: 8px 12px; cursor: pointer; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .card { border: 1px solid #e8e8e8; border-radius: 14px; padding: 14px; }
       pre { background: #f6f6f6; padding: 12px; border-radius: 10px; overflow: auto; }
       .muted { color: #666; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f1f1f1; margin-left: 8px; font-size: 12px; }
+      .incident { padding: 10px 0; border-top: 1px solid #eee; }
+      .incident:first-child { border-top: 0; }
+      .score { font-weight: 700; }
     </style>
   </head>
   <body>
     <h1>Overton Radar</h1>
-    <p class="muted">D1 smoke test: create + list projects</p>
+    <p class="muted">MVP: Projects → Incidents (test) → Alerts (next)</p>
 
-    <div class="row">
-      <input id="name" placeholder="Project name (e.g., 'Agency Demo')" />
-      <button id="create">Create</button>
-      <button id="refresh">Refresh</button>
+    <div class="grid">
+      <section class="card">
+        <h2>Projects</h2>
+
+        <div class="row">
+          <input id="name" placeholder="Project name (e.g., 'Agency Demo')" />
+          <button id="createProject">Create</button>
+          <button id="refreshProjects">Refresh</button>
+        </div>
+
+        <div class="row">
+          <label class="muted">Active project:</label>
+          <select id="projectSelect"></select>
+          <button id="loadIncidents">Load incidents</button>
+        </div>
+
+        <pre id="projectsOut">Loading…</pre>
+      </section>
+
+      <section class="card">
+        <h2>
+          Incidents
+          <span class="pill" id="activeProjectPill">no project</span>
+        </h2>
+
+        <div class="row">
+          <button id="createTestIncident">Create test incident</button>
+          <button id="refreshIncidents">Refresh</button>
+        </div>
+
+        <div id="incidentsOut" class="muted">No incidents loaded yet.</div>
+      </section>
     </div>
 
-    <pre id="out">Loading…</pre>
-
     <script>
-      const out = document.getElementById("out");
-      const nameEl = document.getElementById("name");
+      const projectsOut = document.getElementById("projectsOut");
+      const incidentsOut = document.getElementById("incidentsOut");
+      const projectSelect = document.getElementById("projectSelect");
+      const activeProjectPill = document.getElementById("activeProjectPill");
 
-      async function refresh() {
-        out.textContent = "Loading…";
-        const r = await fetch("/api/projects");
-        const j = await r.json();
-        out.textContent = JSON.stringify(j, null, 2);
+      let cachedProjects = [];
+
+      function getActiveProjectId() {
+        return projectSelect.value || "";
       }
 
-      document.getElementById("refresh").onclick = refresh;
+      function renderProjectsUI(projects) {
+        projectSelect.innerHTML = "";
+        for (const p of projects) {
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.name;
+          projectSelect.appendChild(opt);
+        }
+        const active = getActiveProjectId();
+        activeProjectPill.textContent = active ? active : "no project";
+      }
 
-      document.getElementById("create").onclick = async () => {
-        const name = nameEl.value.trim();
+      async function refreshProjects() {
+        projectsOut.textContent = "Loading…";
+        const r = await fetch("/api/projects");
+        const j = await r.json();
+        cachedProjects = j.projects || [];
+        projectsOut.textContent = JSON.stringify(j, null, 2);
+        renderProjectsUI(cachedProjects);
+      }
+
+      async function createProject() {
+        const name = document.getElementById("name").value.trim();
         if (!name) return alert("Give a project name");
         const r = await fetch("/api/projects", {
           method: "POST",
@@ -48,11 +100,65 @@
         });
         const j = await r.json();
         if (!j.ok) alert(j.error || "Create failed");
-        nameEl.value = "";
-        await refresh();
-      };
+        document.getElementById("name").value = "";
+        await refreshProjects();
+      }
 
-      refresh();
+      function incidentHtml(i) {
+        let reason = {};
+        let claims = [];
+        try { reason = JSON.parse(i.reason_json || "{}"); } catch {}
+        try { claims = JSON.parse(i.top_claims_json || "[]"); } catch {}
+        const top = claims[0]?.claim ? `Top claim: ${claims[0].claim}` : "";
+        const why = reason.fired ? `Signals: ${reason.fired.join(", ")}` : "";
+        return `
+          <div class="incident">
+            <div><span class="score">${i.risk_score}</span> — <strong>${i.title}</strong> <span class="pill">${i.status}</span></div>
+            <div class="muted">${why}</div>
+            <div class="muted">${top}</div>
+          </div>
+        `;
+      }
+
+      async function loadIncidents() {
+        const projectId = getActiveProjectId();
+        if (!projectId) return alert("Create/select a project first");
+        activeProjectPill.textContent = projectId;
+
+        incidentsOut.textContent = "Loading…";
+        const r = await fetch(`/api/incidents?projectId=${encodeURIComponent(projectId)}`);
+        const j = await r.json();
+        if (!j.ok) {
+          incidentsOut.textContent = JSON.stringify(j, null, 2);
+          return;
+        }
+        const items = j.incidents || [];
+        incidentsOut.innerHTML = items.length
+          ? items.map(incidentHtml).join("")
+          : "<span class='muted'>No incidents yet. Create a test incident.</span>";
+      }
+
+      async function createTestIncident() {
+        const projectId = getActiveProjectId();
+        if (!projectId) return alert("Create/select a project first");
+
+        const r = await fetch("/api/incidents/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId })
+        });
+        const j = await r.json();
+        if (!j.ok) return alert(j.error || "Failed to create test incident");
+        await loadIncidents();
+      }
+
+      document.getElementById("createProject").onclick = createProject;
+      document.getElementById("refreshProjects").onclick = refreshProjects;
+      document.getElementById("loadIncidents").onclick = loadIncidents;
+      document.getElementById("refreshIncidents").onclick = loadIncidents;
+      document.getElementById("createTestIncident").onclick = createTestIncident;
+
+      refreshProjects();
     </script>
   </body>
 </html>
